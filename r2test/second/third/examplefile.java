@@ -671,3 +671,142 @@ public class FinalRequestProcessor implements RequestProcessor {
     }
 
 }
+public static QuorumVerifier parseDynamicConfig(Properties dynamicConfigProp, int eAlg, boolean warnings, boolean configBackwardCompatibilityMode) throws IOException, ConfigException {
+        boolean isHierarchical = false;
+        for (Entry<Object, Object> entry : dynamicConfigProp.entrySet()) {
+            String key = entry.getKey().toString().trim();
+            if (key.startsWith("group") || key.startsWith("weight")) {
+                isHierarchical = true;
+            } else if (!configBackwardCompatibilityMode && !key.startsWith("server.") && !key.equals("version")) {
+                LOG.info(dynamicConfigProp.toString());
+                throw new ConfigException("Unrecognised parameter: " + key);
+            }
+        }
+
+        QuorumVerifier qv = createQuorumVerifier(dynamicConfigProp, isHierarchical);
+
+        int numParticipators = qv.getVotingMembers().size();
+        int numObservers = qv.getObservingMembers().size();
+        if (numParticipators == 0) {
+            if (!standaloneEnabled) {
+                throw new IllegalArgumentException("standaloneEnabled = false then "
+                                                   + "number of participants should be >0");
+            }
+            if (numObservers > 0) {
+                throw new IllegalArgumentException("Observers w/o participants is an invalid configuration");
+            }
+        } else if (numParticipators == 1 && standaloneEnabled) {
+            // HBase currently adds a single server line to the config, for
+            // b/w compatibility reasons we need to keep this here. If standaloneEnabled
+            // is true, the QuorumPeerMain script will create a standalone server instead
+            // of a quorum configuration
+            LOG.error("Invalid configuration, only one server specified (ignoring)");
+            if (numObservers > 0) {
+                throw new IllegalArgumentException("Observers w/o quorum is an invalid configuration");
+            }
+        } else {
+            if (warnings) {
+                if (numParticipators <= 2) {
+                    LOG.warn("No server failure will be tolerated. You need at least 3 servers.");
+                } else if (numParticipators % 2 == 0) {
+                    LOG.warn("Non-optimial configuration, consider an odd number of servers.");
+                }
+            }
+
+            for (QuorumServer s : qv.getVotingMembers().values()) {
+                if (s.electionAddr == null) {
+                    throw new IllegalArgumentException("Missing election port for server: " + s.id);
+                }
+            }
+        }
+        return qv;
+    }
+
+    private void setupMyId() throws IOException {
+        File myIdFile = new File(dataDir, "myid");
+        // standalone server doesn't need myid file.
+        if (!myIdFile.isFile()) {
+            return;
+        }
+        BufferedReader br = new BufferedReader(new FileReader(myIdFile));
+        String myIdString;
+        try {
+            myIdString = br.readLine();
+        } finally {
+            br.close();
+        }
+        try {
+            serverId = Long.parseLong(myIdString);
+            MDC.put("myid", myIdString);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("serverid " + myIdString + " is not a number");
+        }
+    }
+
+    private void setupClientPort() throws ConfigException {
+        if (serverId == UNSET_SERVERID) {
+            return;
+        }
+        QuorumServer qs = quorumVerifier.getAllMembers().get(serverId);
+        if (clientPortAddress != null && qs != null && qs.clientAddr != null) {
+            if ((!clientPortAddress.getAddress().isAnyLocalAddress() && !clientPortAddress.equals(qs.clientAddr)) || (
+                clientPortAddress.getAddress().isAnyLocalAddress()
+                && clientPortAddress.getPort() != qs.clientAddr.getPort())) {
+                throw new ConfigException("client address for this server (id = " + serverId
+                                          + ") in static config file is " + clientPortAddress
+                                          + " is different from client address found in dynamic file: " + qs.clientAddr);
+            }
+        }
+        if (qs != null && qs.clientAddr != null) {
+            clientPortAddress = qs.clientAddr;
+        }
+        if (qs != null && qs.clientAddr == null) {
+            qs.clientAddr = clientPortAddress;
+            qs.isClientAddrFromStatic = true;
+        }
+    }
+
+    private void setupPeerType() {
+        // Warn about inconsistent peer type
+        LearnerType roleByServersList = quorumVerifier.getObservingMembers().containsKey(serverId)
+            ? LearnerType.OBSERVER
+            : LearnerType.PARTICIPANT;
+        if (roleByServersList != peerType) {
+            LOG.warn(
+                "Peer type from servers list ({}) doesn't match peerType ({}). Defaulting to servers list.",
+                roleByServersList,
+                peerType);
+
+            peerType = roleByServersList;
+        }
+    }
+
+    public void checkValidity() throws IOException, ConfigException {
+        if (isDistributed()) {
+            if (initLimit == 0) {
+                throw new IllegalArgumentException("initLimit is not set");
+            }
+            if (syncLimit == 0) {
+                throw new IllegalArgumentException("syncLimit is not set");
+            }
+            if (serverId == UNSET_SERVERID) {
+                throw new IllegalArgumentException("myid file is missing");
+            }
+        }
+    }
+
+    public InetSocketAddress getClientPortAddress() {
+        return clientPortAddress;
+    }
+    public InetSocketAddress getSecureClientPortAddress() {
+        return secureClientPortAddress;
+    }
+    public int getObserverMasterPort() {
+        return observerMasterPort;
+    }
+    public File getDataDir() {
+        return dataDir;
+    }
+    public File getDataLogDir() {
+        return dataLogDir;
+    }
