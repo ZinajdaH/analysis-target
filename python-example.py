@@ -569,7 +569,16 @@ def _revert_mtb_products(auth_ctx: AuthorizationContext, transaction: DbTransact
             except Exception as exc:
                 logger.error("Failed to cancel mtb_product {mtb_prod_id}", exc_info=exc)
         item.mtb_product_ids.clear()
-
+        
+def _revert_mtb_products(auth_ctx: AuthorizationContext, transaction: DbTransaction) -> None:
+    """Revert possible created products"""
+    for item in transaction.items:
+        for mtb_prod_id in item.mtb_product_ids:
+            try:
+                cancel_mtb_product(auth_ctx, mtb_prod_id, transaction)
+            except Exception as exc:
+                logger.error("Failed to cancel mtb_product {mtb_prod_id}", exc_info=exc)
+        item.mtb_product_ids.clear()
 
 def _send_receipt_email(user: User, transaction: DbTransaction, email: str = None) -> bool:
     """Send an e-mail with the a receipt for the transaction to the user.
