@@ -193,25 +193,7 @@ function safelyDetachRef(current: Fiber, nearestMountedAncestor: Fiber | null) {
   }
 }
 
-function safelyCallDestroy(
-  current: Fiber,
-  nearestMountedAncestor: Fiber | null,
-  destroy: () => void,
-) {
-  if (__DEV__) {
-    invokeGuardedCallback(null, destroy, null);
-    if (hasCaughtError()) {
-      const error = clearCaughtError();
-      captureCommitPhaseError(current, nearestMountedAncestor, error);
-    }
-  } else {
-    try {
-      destroy();
-    } catch (error) {
-      captureCommitPhaseError(current, nearestMountedAncestor, error);
-    }
-  }
-}
+
 
 function commitBeforeMutationLifeCycles(
   current: Fiber | null,
